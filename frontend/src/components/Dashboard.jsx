@@ -9,7 +9,7 @@ import LogisticsEventFeed from './LogisticsEventFeed'
 
 // Build WS URL from current host — proxied through Vite in dev
 const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-const WS_URL = `${WS_PROTOCOL}//${window.location.host}/dashboard`
+const WS_URL = `${WS_PROTOCOL}//${window.location.host}/ws/dashboard`
 
 
 // Exponential backoff capped at 30s
@@ -31,6 +31,8 @@ export default function Dashboard() {
     const reconnectTimer = useRef(null)
     const reconnectAttempts = useRef(0)
     const intentionalClose = useRef(false)
+
+    const handleEventRef = useRef(null)
 
     const handleEvent = useCallback((msg) => {
         switch (msg.type) {
@@ -65,9 +67,9 @@ export default function Dashboard() {
                         ts: Date.now(),
                     },
                 ])
-                // Session info arrives in 'session' type, but also guard here
-                if (msg.session_id && !session) {
-                    setSession({
+                // Use functional update to avoid closing over stale session
+                if (msg.session_id) {
+                    setSession(prev => prev ? prev : {
                         sessionId: msg.session_id,
                         connectedAt: Date.now(),
                         mode: 'logistics',
@@ -149,7 +151,10 @@ export default function Dashboard() {
             default:
                 break
         }
-    }, [session])
+    }, [])  // ✅ No deps — all state updates use functional form, no stale closures
+
+    // Keep ref in sync so the stable connect callback can always see latest handleEvent
+    useEffect(() => { handleEventRef.current = handleEvent }, [handleEvent])
 
     const connect = useCallback(() => {
         // Already open or connecting — skip
@@ -171,16 +176,16 @@ export default function Dashboard() {
         }
 
         ws.onmessage = (evt) => {
-            try { handleEvent(JSON.parse(evt.data)) } catch { /* malformed frame */ }
+            // Always dispatch through the ref so we never have a stale closure
+            try { handleEventRef.current?.(JSON.parse(evt.data)) } catch { /* malformed frame */ }
         }
 
         ws.onerror = () => {
-            // onerror always fires before onclose — just flag it
             console.warn('[Dashboard WS] Error (backend offline?)')
             setWsStatus('error')
         }
 
-        ws.onclose = (evt) => {
+        ws.onclose = () => {
             wsRef.current = null
             if (intentionalClose.current) {
                 setWsStatus('disconnected')
@@ -192,7 +197,7 @@ export default function Dashboard() {
             console.log(`[Dashboard WS] Reconnecting in ${delay}ms (attempt ${reconnectAttempts.current})`)
             reconnectTimer.current = setTimeout(connect, delay)
         }
-    }, [handleEvent])
+    }, [])  // ✅ Stable — no deps so this never causes useEffect to rerun
 
     // ✅ FIXED: was useCallback with no call (dead code) — now a proper useEffect
     useEffect(() => {

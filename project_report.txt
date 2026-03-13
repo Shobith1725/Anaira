@@ -1,0 +1,60 @@
+# ANAIRA Logistics Voice Agent - Complete Project Report
+
+## 1. Project Overview
+ANAIRA is a real-time, AI-powered voice agent designed specifically for logistics and driver coordination. The system operates on a modern, dual-node architecture:
+- **Backend**: Python-based FastAPI server (port 8000) utilizing WebSockets for low-latency streaming.
+- **Frontend**: React-based Vite server (port 5174/5173) featuring a dynamic, widget-based dashboard.
+
+The application allows drivers to interact with an AI receptionist via voice. The AI can understand intent, gauge emotions, query database states (Supabase), and respond back with synthesized speech in real time.
+
+---
+
+## 2. Architecture & Tech Stack
+
+### Backend Stack
+- **Framework**: FastAPI (chosen for async capabilities and built-in WebSocket support).
+- **Speech-to-Text (STT)**: DeepGram (Nova 3 model) - Converts streaming user audio into text.
+- **LLM/Reasoning**: Groq (Llama 3 model) - Handles fast generation of conversational responses and tool-calling logic.
+- **Text-to-Speech (TTS)**: Cartesia TTS - Used for highly realistic, low-latency voice synthesis. (Fallback: DeepGram Aura).
+- **Emotion Analysis**: Hume AI (or internal empathic evaluation) - Evaluates driver frustration and urgency.
+- **Database**: Supabase (PostgreSQL) - Stores driver profiles, live route data, and active shipments.
+
+### Frontend Stack
+- **Framework**: React 18 + Vite.
+- **Styling**: Vanilla CSS (`index.css`) with custom neon-glow, glassmorphism UI components.
+- **Audio Processing**: MediaRecorder API used in `useAudioRecorder.js` and pure AudioBuffer processing in `useAudioPlayer.js`.
+- **Icons**: Lucide-React.
+
+---
+
+## 3. Core Implementation Details
+
+### A. The WebSocket Pipeline (`backend/voice_pipeline.py`)
+Earlier iterations buffered small 250ms chunks of audio. To resolve parsing logic and header corruption issues:
+1. **Frontend modification**: We adjusted `useAudioRecorder.js` to record complete 3-second `.webm` files and send them over the WebSocket, ensuring container headers remain intact.
+2. **Backend modification**: `voice_pipeline.py` was simplified to immediately process any binary frame larger than 500 bytes. The `CHUNK_THRESHOLD` accumulation loop was removed.
+3. **Session Initialization**: The backend automatically queries Supabase for the active driver on shift as soon as a WebSocket connection opens. It sends a `{ type: 'session' }` payload to the frontend, removing the need for an explicit REST handshake.
+
+### B. The Frontend Experience
+1. **The Widget (`frontend/src/components/Widget.jsx`)**: Built as a dynamic, floating UI element with a central "Orb" that changes state (`listening`, `breathe`) and color depending on the call state.
+2. **Connection Fixes**: Fixed the WebSocket connection URL to point explicitly to `ws://localhost:8000/ws/voice` instead of the Vite proxy server, successfully removing connection drops.
+3. **State Management**: Implemented clean closure references (`endCallRef`) to prevent stale state bugs when shutting down calls via WebSocket.
+
+### C. Security and Version Control
+- **Secrets Management**: Discovered API keys inside `.env` during a GitHub push. Successfully intercepted the violation, removed `.env` from tracking, added it to `.gitignore`, and pushed a clean git history.
+- **Local Fallbacks**: Recreated the virtual environment configuration to ensure that local `venv` processes easily locate the un-tracked `.env` file at runtime.
+
+---
+
+## 4. Workflows Accomplished
+- **Repository Initialization**: Scaffolded out the Python services directories and the Vite React filesystem.
+- **Environment Handling**: Fixed `pydantic-settings` validation errors when API keys were missing.
+- **Multi-Process execution**: Ran both the Node (Vite) and Python (Uvicorn) servers simultaneously, and monitored logs to verify traffic integrity.
+- **GitHub Sync**: Pushed the finalized code to `origin main` ensuring a clean, secret-free working tree.
+
+---
+
+## 5. Next Steps / Future Enhancements
+- **Latency Optimization**: Transition from a chunked Request/Response architecture to true bi-directional audio streaming if faster interjection capabilities are needed.
+- **Dashboard Data Binding**: Fully bind the `LogisticsEventFeed` and `ShipmentTracker` components in the React dashboard to live WebSocket tool-call events.
+- **Deployment**: containerize the application (Docker) or deploy to Vercel/Render for production readiness.

@@ -5,7 +5,7 @@ import { useAudioPlayer } from '../hooks/useAudioPlayer'
 
 // ✅ FIXED: was window.location.host → resolves to localhost:5173 (Vite) in dev
 // WebSocket must go directly to FastAPI on port 8000
-const WS_URL = 'ws://localhost:8000/ws/voice'
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/voice`
 
 const STATE = {
   IDLE: 'idle',

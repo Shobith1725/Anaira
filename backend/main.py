@@ -7,6 +7,7 @@ from config import settings
 from session import router as session_router
 from voice_pipeline import router as voice_router
 from dashboard_ws import router as dashboard_router
+from webrtc_signaling import router as webrtc_router   # NEW
 
 
 @asynccontextmanager
@@ -34,6 +35,7 @@ app.add_middleware(
 app.include_router(session_router)
 app.include_router(voice_router)
 app.include_router(dashboard_router)
+app.include_router(webrtc_router)    # NEW
 
 
 @app.get("/health")

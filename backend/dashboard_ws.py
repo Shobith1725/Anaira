@@ -15,7 +15,7 @@ router = APIRouter(tags=["dashboard"])
 _dashboard_clients: Set[WebSocket] = set()
 
 
-@router.websocket("/dashboard")
+@router.websocket("/ws/dashboard")
 async def dashboard_ws(ws: WebSocket):
     """
     Warehouse dashboard connects to this endpoint.
