@@ -7,13 +7,19 @@ DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 async def transcribe(audio_buffer: bytes) -> dict:
     """
     Sends raw audio bytes to DeepGram Nova 3.
-    Returns transcript, language, confidence.
+    Returns transcript and confidence. Language is always 'en'.
+
+    ✅ FIXED: removed detect_language param entirely.
+    Previously DeepGram returned detected_language='es' even when
+    language='en' was set, which leaked into the Groq system prompt
+    and caused Spanish responses.
     """
     params = {
-        "model":           "nova-3",
-        "smart_format":    "true",
-        "language":        "en",
-        "punctuate":       "true",
+        "model":        "nova-3",
+        "smart_format": "true",
+        "language":     "en",      # force English — no auto-detection
+        "punctuate":    "true",
+        # ✅ detect_language intentionally NOT set — it overrides language=en
     }
 
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -36,7 +42,6 @@ async def transcribe(audio_buffer: bytes) -> dict:
     try:
         channel     = data["results"]["channels"][0]
         alternative = channel["alternatives"][0]
-        language    = channel.get("detected_language", "en")
         transcript  = alternative.get("transcript", "")
         confidence  = alternative.get("confidence", 0.0)
     except (KeyError, IndexError):
@@ -44,6 +49,6 @@ async def transcribe(audio_buffer: bytes) -> dict:
 
     return {
         "transcript": transcript,
-        "language":   language,
+        "language":   "en",        # always en — never trust detected_language
         "confidence": confidence,
     }

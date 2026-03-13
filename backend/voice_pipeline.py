@@ -1,6 +1,6 @@
 """
 Main WebSocket endpoint.
-Receives raw audio from browser (250ms chunks),
+Receives complete 3-second webm audio files from browser,
 runs the full AI pipeline, streams voice back.
 
 SESSION MODEL (v2):
@@ -8,6 +8,11 @@ SESSION MODEL (v2):
 - Backend auto-creates session when WS connects.
 - Queries Supabase for the first active driver on shift.
 - Sends { type: 'session', session_id, driver_id } as the very first frame.
+
+✅ FIXED: removed CHUNK_THRESHOLD accumulation loop.
+Frontend now sends one complete self-contained webm file every 3 seconds
+(with header intact). No need to buffer multiple chunks — process each
+received binary frame directly.
 """
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -28,27 +33,21 @@ from config                import settings
 
 router = APIRouter(tags=["voice"])
 
-# 12 chunks × 250ms = 3 seconds of audio per processing cycle
-CHUNK_THRESHOLD = 12
-
 
 @router.websocket("/ws/voice")
 async def voice_stream(ws: WebSocket):
     await ws.accept()
 
-    session_id   = None
-    audio_buffer = b""
-    chunk_count  = 0
+    session_id = None
 
     try:
         # ── Auto-create session ────────────────────────────────
         session_id = str(uuid.uuid4())
         now        = datetime.utcnow().isoformat()
 
-        # Load the first active driver from Supabase (real data)
-        driver_id   = None
-        driver_name = "Driver"
-        mode        = "logistics" if settings.LOGISTICS_MODE else "receptionist"
+        driver_id        = None
+        driver_name      = "Driver"
+        mode             = "logistics" if settings.LOGISTICS_MODE else "receptionist"
         active_shipments = []
         current_route    = None
 
@@ -60,7 +59,6 @@ async def voice_stream(ws: WebSocket):
             from supabase import create_client
             sb = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
-            # Grab the first driver on an active shift
             result = (
                 sb.table("drivers")
                   .select("id, driver_code, caller_id, callers(name, preferred_lang)")
@@ -69,11 +67,10 @@ async def voice_stream(ws: WebSocket):
                   .execute()
             )
             if result.data:
-                row         = result.data[0]
-                driver_id   = row["id"]
-                caller_info = row.get("callers") or {}
-                driver_name = caller_info.get("name", "Driver")
-
+                row              = result.data[0]
+                driver_id        = row["id"]
+                caller_info      = row.get("callers") or {}
+                driver_name      = caller_info.get("name", "Driver")
                 active_shipments = await get_active_shipments_for_driver(driver_id)
                 current_route    = await get_route_for_driver(driver_id)
 
@@ -97,64 +94,54 @@ async def voice_stream(ws: WebSocket):
 
         # ── Send session info to frontend as first frame ───────
         await ws.send_text(json.dumps({
-            "type":       "session",
-            "session_id": session_id,
-            "driver_id":  driver_id,
+            "type":        "session",
+            "session_id":  session_id,
+            "driver_id":   driver_id,
             "driver_name": driver_name,
-            "mode":       mode,
+            "mode":        mode,
         }))
 
-        # ── Broadcast session start to dashboard ───────────────
         await broadcast({
-            "type":       "session",
-            "session_id": session_id,
-            "driver_id":  driver_id,
+            "type":        "session",
+            "session_id":  session_id,
+            "driver_id":   driver_id,
             "driver_name": driver_name,
         })
 
         # ── Audio streaming loop ───────────────────────────────
+        # Frontend sends one complete 3s webm file per message.
+        # Each binary frame is a self-contained audio file — process immediately.
         while True:
             raw = await ws.receive()
 
             if raw["type"] == "websocket.disconnect":
                 break
 
-            audio_data = None
-
             if raw["type"] == "websocket.receive":
+                # ── Binary frame = complete audio chunk ────────
                 raw_bytes = raw.get("bytes") or raw.get("data")
-                if isinstance(raw_bytes, bytes) and len(raw_bytes) > 0:
-                    audio_data = raw_bytes
-                elif isinstance(raw.get("text"), str):
+                if isinstance(raw_bytes, bytes) and len(raw_bytes) > 500:
+                    session = get_session(session_id)
+                    if not session:
+                        break
+                    await _process_audio(
+                        ws           = ws,
+                        session_id   = session_id,
+                        session      = session,
+                        audio_buffer = raw_bytes,
+                    )
+                    continue
+
+                # ── Text frame = control message ───────────────
+                text = raw.get("text")
+                if isinstance(text, str):
                     try:
-                        msg = json.loads(raw["text"])
+                        msg = json.loads(text)
                         if msg.get("type") == "end_session":
-                            print(f"[PIPELINE] end_session received for {session_id}")
+                            print(f"[PIPELINE] end_session for {session_id}")
                             break
                     except json.JSONDecodeError:
                         pass
-
-            if audio_data:
-                audio_buffer += audio_data
-                chunk_count  += 1
-
-                if chunk_count < CHUNK_THRESHOLD:
-                    continue
-
-                audio_to_process = audio_buffer
-                audio_buffer     = b""
-                chunk_count      = 0
-
-                session = get_session(session_id)
-                if not session:
-                    break
-
-                await _process_audio(
-                    ws           = ws,
-                    session_id   = session_id,
-                    session      = session,
-                    audio_buffer = audio_to_process,
-                )
 
     except WebSocketDisconnect:
         print(f"[PIPELINE] Client disconnected: {session_id}")
@@ -200,7 +187,6 @@ async def _process_audio(
         emotion_scores = {}
 
     transcript = stt_result.get("transcript", "").strip()
-    language   = stt_result.get("language", "en")
 
     # Skip silence or noise
     if not transcript or len(transcript) < 3:
@@ -209,23 +195,14 @@ async def _process_audio(
     print(f"[STT]     {driver_name}: {transcript}")
     print(f"[EMOTION] {emotion_scores}")
 
-    update_session(session_id, {"detected_lang": language})
-
     await broadcast({
         "type":       "transcript",
         "speaker":    "driver",
         "text":       transcript,
-        "language":   language,
+        "language":   "en",
         "session_id": session_id,
     })
 
-    await broadcast({
-        "type":       "emotion",
-        "scores":     emotion_scores,
-        "session_id": session_id,
-    })
-
-    # also send flat emotion keys for the updated Dashboard handler
     await broadcast({
         "type":        "emotion",
         "frustration": emotion_scores.get("frustration", 0),
@@ -259,11 +236,10 @@ async def _process_audio(
 
         result = await execute_tool(tool_name, args)
 
-        # Broadcast tool call to dashboard
         await broadcast({
-            "type":      "tool_call",
-            "tool_name": tool_name,
-            "result":    result,
+            "type":       "tool_call",
+            "tool_name":  tool_name,
+            "result":     result,
             "session_id": session_id,
         })
 
@@ -278,7 +254,7 @@ async def _process_audio(
             emotion_directive = emotion_directive,
             driver_name       = driver_name,
             driver_id         = driver_id,
-            detected_language = language,
+            detected_language = "en",   # hardcoded — multilingual removed
             turn_history      = session_fresh.get("turn_history", []),
             active_shipments  = session_fresh.get("active_shipments", []),
             current_route     = session_fresh.get("current_route"),
@@ -301,7 +277,6 @@ async def _process_audio(
         "session_id": session_id,
     })
 
-    # send to widget itself as well
     try:
         await ws.send_text(json.dumps({
             "type": "response",
@@ -321,13 +296,11 @@ async def _process_audio(
 
     except Exception as e:
         print(f"[TTS ERROR] {e}")
-
         try:
             from services.deepgram_tts import synthesize_fallback
             audio_bytes = await synthesize_fallback(response_text)
             await ws.send_bytes(audio_bytes)
             print("[TTS] Fell back to DeepGram Aura successfully")
-
         except Exception as e2:
             print(f"[TTS FALLBACK ERROR] {e2}")
             await ws.send_text(json.dumps({
@@ -335,7 +308,6 @@ async def _process_audio(
                 "text": response_text,
             }))
 
-    # Tell the widget this turn is done — back to listening
     try:
         await ws.send_text(json.dumps({"type": "done"}))
     except Exception:

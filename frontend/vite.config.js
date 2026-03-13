@@ -6,32 +6,24 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // ── REST endpoints ─────────────────────────────────────────────
-      '/session': {
-        target: 'http://localhost:8000',
-        changeOrigin: true,
-      },
+      // ── REST ──────────────────────────────────────────────────────
       '/health': {
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
 
-      // ── WebSocket: voice pipeline ──────────────────────────────────
-      // Backend: @router.websocket("/ws/voice") in voice_pipeline.py
-      // NOTE: target must use http:// even for WS — http-proxy upgrades it
+      // ── WebSockets ────────────────────────────────────────────────
+      // Covers both /ws/voice and /ws/dashboard
+      // target must be http:// — Vite upgrades to ws:// automatically
       '/ws': {
         target: 'http://localhost:8000',
         ws: true,
         changeOrigin: true,
       },
 
-      // ── WebSocket: dashboard live feed ────────────────────────────
-      // Backend: @router.websocket("/dashboard") in dashboard_ws.py
-      '/dashboard': {
-        target: 'http://localhost:8000',
-        ws: true,
-        changeOrigin: true,
-      },
+      // ── REMOVED: /session → endpoint does not exist in backend
+      // ── REMOVED: /dashboard → already covered by /ws proxy above
+      //    (/ws/dashboard starts with /ws so it matches the rule above)
     },
   },
 })
