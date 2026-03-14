@@ -28,21 +28,12 @@ export default function Widget() {
   // Refs to recorder controls so audio player callbacks don't cause stale closures
   const pauseRecordingRef = useRef(null)
   const resumeRecordingRef = useRef(null)
-  // ✅ SYNC FIX: buffer response text, display only when audio starts playing
-  const pendingResponseRef = useRef(null)
 
   // ── Audio player with playback callbacks to pause/resume recorder ──
   const { playChunk, stop: stopPlayer } = useAudioPlayer({
     onPlaybackStart: () => {
       // Pause mic while ANAIRA is speaking (prevents feedback loop)
       pauseRecordingRef.current?.()
-      // ✅ SYNC: Show the buffered response text NOW — exactly when audio starts
-      if (pendingResponseRef.current) {
-        setStatusMsg(`ANAIRA: ${pendingResponseRef.current}`)
-        pendingResponseRef.current = null
-      } else {
-        setStatusMsg('🔊 Speaking…')
-      }
     },
     onPlaybackEnd: () => {
       // Resume mic after ANAIRA finishes speaking
@@ -124,8 +115,8 @@ export default function Widget() {
         setStatusMsg('🧠 Thinking…')
         break
       case 'response':
-        // ✅ SYNC: Don't show text yet — buffer it, display in onPlaybackStart
-        pendingResponseRef.current = msg.text
+        // Show ANAIRA's response text immediately
+        setStatusMsg(`ANAIRA: ${msg.text}`)
         break
       case 'audio': {
         try {
