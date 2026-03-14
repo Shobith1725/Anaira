@@ -34,10 +34,12 @@ export default function Widget() {
     onPlaybackStart: () => {
       // Pause mic while ANAIRA is speaking (prevents feedback loop)
       pauseRecordingRef.current?.()
+      setStatusMsg('🔊 Speaking…')
     },
     onPlaybackEnd: () => {
       // Resume mic after ANAIRA finishes speaking
       resumeRecordingRef.current?.()
+      setStatusMsg('Listening…')
     },
   })
 
@@ -108,9 +110,10 @@ export default function Widget() {
       case 'transcript':
         if (msg.speaker === 'driver') {
           setStatusMsg(`You: ${msg.text}`)
-        } else {
-          setStatusMsg(`ANAIRA: ${msg.text}`)
         }
+        break
+      case 'processing':
+        setStatusMsg('🧠 Thinking…')
         break
       case 'response':
         setStatusMsg(`ANAIRA: ${msg.text}`)

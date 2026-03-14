@@ -1,6 +1,6 @@
 """
 Main WebSocket endpoint.
-Receives complete 3-second webm audio files from browser,
+Receives complete 1.5-second webm audio files from browser,
 runs the full AI pipeline, streams voice back.
 
 SESSION MODEL (v2):
@@ -9,10 +9,11 @@ SESSION MODEL (v2):
 - Queries Supabase for the first active driver on shift.
 - Sends { type: 'session', session_id, driver_id } as the very first frame.
 
-✅ FIXED: removed CHUNK_THRESHOLD accumulation loop.
-Frontend now sends one complete self-contained webm file every 3 seconds
-(with header intact). No need to buffer multiple chunks — process each
-received binary frame directly.
+✅ v3 IMPROVEMENTS:
+- Text/audio sync: response text sent AFTER TTS, right before audio
+- Concurrent processing: audio chunks processed in background tasks
+- Processing status: sends "processing" message so Widget shows "Thinking..."
+- Better silence filtering: skips short/empty transcripts early
 """
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -43,7 +44,7 @@ async def process_audio_chunk(
 ) -> None:
     """
     Runs the full AI pipeline for one audio segment:
-    Parallel STT + Emotion → EmpathyOS → Groq LLM → Cartesia TTS
+    STT → Groq LLM → TTS (text+audio sent together for sync)
 
     send_text_fn  and send_bytes_fn are injected by the caller
     (WebSocket handler or WebRTC peer) so this function stays transport-agnostic.
@@ -62,12 +63,25 @@ async def process_audio_chunk(
 
     transcript = stt_result.get("transcript", "").strip()
 
-    # Skip silence or noise
+    # Skip silence, noise, or very short utterances (likely noise)
     if not transcript or len(transcript) < 3:
+        return
+
+    # Skip common STT noise artifacts
+    noise_phrases = {"you", "yeah", "hmm", "uh", "um", "oh", "ah", "the", "a"}
+    if transcript.lower() in noise_phrases:
         return
 
     print(f"[STT]     {driver_name}: {transcript}")
 
+    # Tell Widget we're processing (so it shows "Thinking..." instead of "Listening...")
+    if send_text_fn:
+        try:
+            await send_text_fn({"type": "processing", "text": transcript})
+        except Exception:
+            pass
+
+    # Broadcast to dashboard
     await broadcast({
         "type":       "transcript",
         "speaker":    "driver",
@@ -78,7 +92,7 @@ async def process_audio_chunk(
 
     await broadcast({
         "type":       "thought",
-        "text":       f"Heard: \"{transcript}\" — processing...",
+        "text":       f'Heard: "{transcript}" — processing...',
         "session_id": session_id,
     })
 
@@ -101,6 +115,13 @@ async def process_audio_chunk(
             "text":       f"Calling tool: {tool_name}",
             "session_id": session_id,
         })
+
+        # Send tool_call status to Widget
+        if send_text_fn:
+            try:
+                await send_text_fn({"type": "tool_call", "tool_name": tool_name})
+            except Exception:
+                pass
 
         result = await execute_tool(tool_name, args)
 
@@ -144,32 +165,29 @@ async def process_audio_chunk(
 
     update_session(session_id, {"turn_history": updated_history})
 
-    await broadcast({
-        "type":       "transcript",
-        "speaker":    "anaira",
-        "text":       response_text,
-        "session_id": session_id,
-    })
-
-    # Send response text to client
-    if send_text_fn:
-        try:
-            await send_text_fn({"type": "response", "text": response_text})
-        except Exception:
-            pass
-
-    # ── Step 5: TTS → stream audio back ───────────────────────
+    # ── Step 5: TTS → then send text+audio together for sync ──
     await broadcast({
         "type":       "thought",
-        "text":       f"Responding: \"{response_text[:60]}{'...' if len(response_text) > 60 else ''}\" — generating voice...",
+        "text":       f'Speaking: "{response_text[:60]}{"..." if len(response_text) > 60 else ""}"',
         "session_id": session_id,
     })
+
     try:
         audio_bytes = await synthesize(
             text      = response_text,
             stability = tts_params["stability"],
             speed     = tts_params["speed"],
         )
+
+        # ✅ SYNC FIX: Send text AND audio together — text appears same moment as audio
+        if send_text_fn:
+            await send_text_fn({"type": "response", "text": response_text})
+        await broadcast({
+            "type":       "transcript",
+            "speaker":    "anaira",
+            "text":       response_text,
+            "session_id": session_id,
+        })
         if send_bytes_fn:
             await send_bytes_fn(audio_bytes)
 
@@ -178,13 +196,29 @@ async def process_audio_chunk(
         try:
             from services.deepgram_tts import synthesize_fallback
             audio_bytes = await synthesize_fallback(response_text)
+            # Still sync: text + audio together
+            if send_text_fn:
+                await send_text_fn({"type": "response", "text": response_text})
+            await broadcast({
+                "type":       "transcript",
+                "speaker":    "anaira",
+                "text":       response_text,
+                "session_id": session_id,
+            })
             if send_bytes_fn:
                 await send_bytes_fn(audio_bytes)
             print("[TTS] Fell back to DeepGram Aura successfully")
         except Exception as e2:
             print(f"[TTS FALLBACK ERROR] {e2}")
+            # No audio available — send text only as last resort
             if send_text_fn:
-                await send_text_fn({"type": "tts_fallback", "text": response_text})
+                await send_text_fn({"type": "response", "text": response_text})
+            await broadcast({
+                "type":       "transcript",
+                "speaker":    "anaira",
+                "text":       response_text,
+                "session_id": session_id,
+            })
 
     if send_text_fn:
         try:
@@ -193,12 +227,13 @@ async def process_audio_chunk(
             pass
 
 
-# ── WebSocket endpoint (unchanged behaviour) ──────────────────────────────────
+# ── WebSocket endpoint ─────────────────────────────────────────────────────────
 @router.websocket("/ws/voice")
 async def voice_stream(ws: WebSocket):
     await ws.accept()
 
     session_id = None
+    processing_task = None  # Track current processing task
 
     try:
         # ── Auto-create session ────────────────────────────────
@@ -296,15 +331,24 @@ async def voice_stream(ws: WebSocket):
             if raw["type"] == "websocket.receive":
                 raw_bytes = raw.get("bytes") or raw.get("data")
                 if isinstance(raw_bytes, bytes) and len(raw_bytes) > 500:
+                    # Skip new audio if still processing previous chunk
+                    # This prevents overlapping responses
+                    if processing_task and not processing_task.done():
+                        continue
+
                     session = get_session(session_id)
                     if not session:
                         break
-                    await process_audio_chunk(
-                        audio_buffer  = raw_bytes,
-                        session_id    = session_id,
-                        session       = session,
-                        send_text_fn  = ws_send_text,
-                        send_bytes_fn = ws_send_bytes,
+
+                    # ✅ Process in background task so WS loop stays responsive
+                    processing_task = asyncio.create_task(
+                        process_audio_chunk(
+                            audio_buffer  = raw_bytes,
+                            session_id    = session_id,
+                            session       = session,
+                            send_text_fn  = ws_send_text,
+                            send_bytes_fn = ws_send_bytes,
+                        )
                     )
                     continue
 
@@ -329,3 +373,7 @@ async def voice_stream(ws: WebSocket):
             }))
         except Exception:
             pass
+    finally:
+        # Cancel any running processing task on disconnect
+        if processing_task and not processing_task.done():
+            processing_task.cancel()
