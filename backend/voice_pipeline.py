@@ -81,20 +81,19 @@ async def process_audio_chunk(
         except Exception:
             pass
 
-    # Broadcast to dashboard
-    await broadcast({
+    # Broadcast to dashboard — fire-and-forget (don't block pipeline)
+    asyncio.create_task(broadcast({
         "type":       "transcript",
         "speaker":    "driver",
         "text":       transcript,
         "language":   "en",
         "session_id": session_id,
-    })
-
-    await broadcast({
+    }))
+    asyncio.create_task(broadcast({
         "type":       "thought",
         "text":       f'Heard: "{transcript}" — processing...',
         "session_id": session_id,
-    })
+    }))
 
     # ── Step 2: Neutral tone (Hume removed for speed) ─────────
     emotion_directive, tts_params = get_neutral_directive()
@@ -110,11 +109,11 @@ async def process_audio_chunk(
             if active:
                 args["shipment_id"] = active[0]["id"]
 
-        await broadcast({
+        asyncio.create_task(broadcast({
             "type":       "thought",
             "text":       f"Calling tool: {tool_name}",
             "session_id": session_id,
-        })
+        }))
 
         # Send tool_call status to Widget
         if send_text_fn:
@@ -125,23 +124,23 @@ async def process_audio_chunk(
 
         result = await execute_tool(tool_name, args)
 
-        await broadcast({
+        asyncio.create_task(broadcast({
             "type":       "tool_call",
             "tool_name":  tool_name,
             "result":     result,
             "session_id": session_id,
-        })
+        }))
 
         return result
 
     # ── Step 4: Groq LLM ──────────────────────────────────────
     session_fresh = get_session(session_id)
 
-    await broadcast({
+    asyncio.create_task(broadcast({
         "type":       "thought",
         "text":       "Analyzing intent and generating response...",
         "session_id": session_id,
-    })
+    }))
 
     try:
         response_text, updated_history = await respond(
@@ -166,11 +165,11 @@ async def process_audio_chunk(
     update_session(session_id, {"turn_history": updated_history})
 
     # ── Step 5: TTS → then send text+audio together for sync ──
-    await broadcast({
+    asyncio.create_task(broadcast({
         "type":       "thought",
         "text":       f'Speaking: "{response_text[:60]}{"..." if len(response_text) > 60 else ""}"',
         "session_id": session_id,
-    })
+    }))
 
     try:
         audio_bytes = await synthesize(
@@ -182,12 +181,12 @@ async def process_audio_chunk(
         # ✅ SYNC FIX: Send text AND audio together — text appears same moment as audio
         if send_text_fn:
             await send_text_fn({"type": "response", "text": response_text})
-        await broadcast({
+        asyncio.create_task(broadcast({
             "type":       "transcript",
             "speaker":    "anaira",
             "text":       response_text,
             "session_id": session_id,
-        })
+        }))
         if send_bytes_fn:
             await send_bytes_fn(audio_bytes)
 

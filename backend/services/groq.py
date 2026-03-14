@@ -269,56 +269,21 @@ def _build_system_prompt(driver_name:      str,
             ]
             route_summary = "DRIVER'S ROUTE:\n" + "\n".join(stops)
 
-        return f"""You are ANAIRA, an AI voice dispatch assistant for a logistics company.
-
-DRIVER NAME: {driver_name}
-LANGUAGE: You MUST always respond in English only. Never use any other language under any circumstances.
-TONE DIRECTIVE: {emotion_directive}
+        return f"""You are ANAIRA, AI voice dispatch for logistics. Driver: {driver_name}. English only. {emotion_directive}
 
 {shipment_summary}
-
 {route_summary}
 
-YOUR ROLE:
-- Help drivers confirm deliveries, report delays, get next stop directions
-- Answer questions about warehouse addresses, product stock levels, and delivery orders
-- Identify shipments from context — driver may say "the package" or just a number
-- Always confirm the action you took out loud so driver knows it worked
-- Keep every response UNDER 30 WORDS — drivers are on the road
-- For route guidance speak the address simply and clearly
-- If driver has an emergency, escalate immediately
-
-WAREHOUSE QUERIES:
-- When driver asks for a warehouse address or location → call get_warehouse_info
-- When driver asks how much of a product is available → call get_product_quantity
-- When driver asks about their delivery order → call get_delivery_order
-- When driver asks what deliveries they have today → call get_all_delivery_orders
-- When driver asks what products are at a warehouse → call list_warehouse_products
-- Always speak quantities clearly: "You have 200 units of Paracetamol to deliver"
-- For low stock (under 50 units) always mention: "Stock is running low"
-
-RULES:
-- Never invent shipment or warehouse details — always use tools to look them up
-- Never reveal you are an AI unless directly asked
-- Always confirm every database action out loud
-- ENGLISH ONLY — regardless of what language the driver speaks in"""
+ROLE: Help drivers confirm deliveries, report delays, get directions, check warehouse stock.
+Identify shipments from context. Confirm every action out loud. UNDER 30 WORDS per response.
+Use tools for all lookups — never invent data. For low stock (<50 units) warn driver.
+ENGLISH ONLY."""
 
     else:
-        return f"""You are ANAIRA, an AI receptionist assistant.
+        return f"""You are ANAIRA, AI receptionist. Caller: {driver_name}. English only. {emotion_directive}
 
-CALLER NAME: {driver_name}
-LANGUAGE: You MUST always respond in English only. Never use any other language.
-TONE DIRECTIVE: {emotion_directive}
-
-YOUR ROLE:
-- Help callers book and manage appointments
-- Be warm, professional, and efficient
-- Keep responses concise and clear
-
-RULES:
-- Always use tools to check and book slots — never guess availability
-- Confirm every booking out loud with the date and time
-- ENGLISH ONLY — regardless of what language the caller speaks in"""
+ROLE: Help callers book and manage appointments. Be warm and efficient.
+Always use tools to check/book slots. Confirm bookings with date and time. ENGLISH ONLY."""
 
 
 async def respond(transcript:        str,
@@ -348,7 +313,7 @@ async def respond(transcript:        str,
     tools = LOGISTICS_TOOLS if mode == "logistics" else RECEPTIONIST_TOOLS
 
     messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(turn_history[-8:])
+    messages.extend(turn_history[-4:])  # Only last 4 msgs — fewer tokens = faster
     messages.append({"role": "user", "content": transcript})
 
     # ── First LLM call ────────────────────────────────────────
@@ -357,7 +322,7 @@ async def respond(transcript:        str,
         messages    = messages,
         tools       = tools,
         tool_choice = "auto",
-        temperature = 0.3,
+        temperature = 0.1,
         max_tokens  = 100,
     )
 
@@ -408,6 +373,6 @@ async def respond(transcript:        str,
     # Update turn history
     turn_history.append({"role": "user",      "content": transcript})
     turn_history.append({"role": "assistant", "content": final_text})
-    turn_history = turn_history[-8:]
+    turn_history = turn_history[-4:]
 
     return final_text, turn_history
