@@ -3,6 +3,13 @@ import { Phone, LayoutDashboard } from 'lucide-react'
 import Widget from './components/Widget'
 import Dashboard from './components/Dashboard'
 
+/**
+ * ✅ FIXED: Previously used conditional rendering ({view === 'widget' && <Widget />})
+ * which UNMOUNTS the Widget when switching to Dashboard, killing the voice WebSocket.
+ * 
+ * Now both components are ALWAYS mounted — we toggle visibility with CSS display.
+ * This keeps the voice session alive while viewing the dashboard.
+ */
 export default function App() {
   const [view, setView] = useState('widget') // 'widget' | 'dashboard'
 
@@ -30,10 +37,12 @@ export default function App() {
         </button>
       </nav>
 
-      {/* View content */}
-      <div style={styles.content}>
-        {view === 'widget' && <Widget />}
-        {view === 'dashboard' && <Dashboard />}
+      {/* Both views always mounted — toggle with display to keep WS connections alive */}
+      <div style={{ ...styles.content, display: view === 'widget' ? 'flex' : 'none' }}>
+        <Widget />
+      </div>
+      <div style={{ ...styles.content, display: view === 'dashboard' ? 'flex' : 'none' }}>
+        <Dashboard />
       </div>
     </div>
   )
@@ -62,7 +71,6 @@ const styles = {
   },
   content: {
     flex: 1,
-    display: 'flex',
     flexDirection: 'column',
   },
 }

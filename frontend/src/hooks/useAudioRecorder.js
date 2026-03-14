@@ -3,17 +3,16 @@ import { useRef, useState, useCallback } from 'react'
 /**
  * Records audio from the microphone.
  *
- * ✅ FIXED: original used recorder.start(250) which emits 250ms fragments.
- * Only the FIRST fragment has the webm container header — all subsequent
- * fragments are headerless and DeepGram cannot decode them, causing empty
- * transcripts after the first response.
+ * ✅ FIXED v2: Added pauseRecording() and resumeRecording() so the Widget
+ * can pause the mic while ANAIRA is speaking (TTS playback), preventing
+ * the audio feedback loop where the mic picks up its own response.
  *
- * Fix: restart the MediaRecorder every CYCLE_MS (3000ms) so every chunk
- * sent to the backend is a complete, self-contained webm file with its
- * own header. This matches voice_pipeline.py's CHUNK_THRESHOLD of 12×250ms.
+ * ✅ FIXED v1: original used recorder.start(250) which emits 250ms fragments.
+ * Fix: restart the MediaRecorder every CYCLE_MS so every chunk is a
+ * complete, self-contained webm file with its own header.
  */
 
-const CYCLE_MS = 3000   // collect 3s then send — matches backend CHUNK_THRESHOLD
+const CYCLE_MS = 1500   // 1.5s capture window — faster response loop
 
 export function useAudioRecorder({ onChunk }) {
   const [isRecording, setIsRecording] = useState(false)
@@ -23,6 +22,7 @@ export function useAudioRecorder({ onChunk }) {
   const recorderRef = useRef(null)
   const cycleTimer = useRef(null)
   const activeRef = useRef(false)   // stays true while recording session is live
+  const pausedRef = useRef(false)   // true when paused for TTS playback
 
   // Pick best supported mime type
   const getMimeType = () => {
@@ -35,9 +35,9 @@ export function useAudioRecorder({ onChunk }) {
     return types.find((t) => MediaRecorder.isTypeSupported(t)) || ''
   }
 
-  // Start one 3-second recording cycle
+  // Start one recording cycle
   const startCycle = useCallback(() => {
-    if (!activeRef.current || !streamRef.current) return
+    if (!activeRef.current || !streamRef.current || pausedRef.current) return
 
     const mimeType = getMimeType()
     const recorder = new MediaRecorder(streamRef.current, {
@@ -57,11 +57,12 @@ export function useAudioRecorder({ onChunk }) {
       // Combine all chunks into one complete webm blob with header intact
       const blob = new Blob(chunks, { type: mimeType || 'audio/webm' })
       const buffer = await blob.arrayBuffer()
-      if (buffer.byteLength > 500) {   // skip near-silent frames
+      // Only send if not paused and has enough data (skip near-silent frames)
+      if (buffer.byteLength > 500 && !pausedRef.current) {
         onChunk?.(buffer)
       }
-      // Immediately start next cycle if still active
-      if (activeRef.current) startCycle()
+      // Immediately start next cycle if still active and not paused
+      if (activeRef.current && !pausedRef.current) startCycle()
     }
 
     recorder.onerror = (e) => {
@@ -86,11 +87,13 @@ export function useAudioRecorder({ onChunk }) {
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
+          autoGainControl: true,
         },
         video: false,
       })
       streamRef.current = stream
       activeRef.current = true
+      pausedRef.current = false
       setIsRecording(true)
       startCycle()
     } catch (err) {
@@ -100,6 +103,7 @@ export function useAudioRecorder({ onChunk }) {
 
   const stopRecording = useCallback(() => {
     activeRef.current = false
+    pausedRef.current = false
     clearTimeout(cycleTimer.current)
     if (recorderRef.current?.state === 'recording') {
       recorderRef.current.stop()
@@ -110,5 +114,21 @@ export function useAudioRecorder({ onChunk }) {
     setIsRecording(false)
   }, [])
 
-  return { isRecording, startRecording, stopRecording, error }
+  // Pause recording (during TTS playback) — stops current cycle, won't start new ones
+  const pauseRecording = useCallback(() => {
+    pausedRef.current = true
+    clearTimeout(cycleTimer.current)
+    if (recorderRef.current?.state === 'recording') {
+      recorderRef.current.stop()
+    }
+  }, [])
+
+  // Resume recording after TTS playback ends
+  const resumeRecording = useCallback(() => {
+    if (!activeRef.current) return
+    pausedRef.current = false
+    startCycle()
+  }, [startCycle])
+
+  return { isRecording, startRecording, stopRecording, pauseRecording, resumeRecording, error }
 }

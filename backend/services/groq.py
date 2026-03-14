@@ -1,8 +1,8 @@
-from groq import Groq
+from groq import AsyncGroq
 from config import settings
 import json
 
-client = Groq(api_key=settings.GROQ_API_KEY)
+client = AsyncGroq(api_key=settings.GROQ_API_KEY)
 
 # ── TOOL SCHEMAS passed to Groq ───────────────────────────────────────
 LOGISTICS_TOOLS = [
@@ -352,8 +352,8 @@ async def respond(transcript:        str,
     messages.append({"role": "user", "content": transcript})
 
     # ── First LLM call ────────────────────────────────────────
-    response = client.chat.completions.create(
-        model       = "llama-3.3-70b-versatile",
+    response = await client.chat.completions.create(
+        model       = "llama-3.1-8b-instant",
         messages    = messages,
         tools       = tools,
         tool_choice = "auto",
@@ -395,11 +395,11 @@ async def respond(transcript:        str,
                 "content":      result,
             })
 
-        response = client.chat.completions.create(
-            model       = "llama-3.3-70b-versatile",
+        response = await client.chat.completions.create(
+            model       = "llama-3.1-8b-instant",
             messages    = messages,
             temperature = 0.3,
-            max_tokens  = 200,
+            max_tokens  = 80,
         )
         msg = response.choices[0].message
 

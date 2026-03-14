@@ -3,12 +3,17 @@ import { useRef, useCallback } from 'react'
 /**
  * Plays MP3 audio binary chunks received from the backend WebSocket.
  * Uses Web AudioContext to decode and schedule playback in sequence.
+ *
+ * ✅ FIXED: Added onPlaybackStart / onPlaybackEnd callbacks so Widget
+ * can pause the microphone recorder while ANAIRA is speaking,
+ * preventing the audio feedback loop (mic picks up TTS → re-transcribes).
  */
-export function useAudioPlayer() {
+export function useAudioPlayer({ onPlaybackStart, onPlaybackEnd } = {}) {
   const audioCtxRef = useRef(null)
   const playQueueRef = useRef([])
   const isPlayingRef = useRef(false)
   const nextStartTimeRef = useRef(0)
+  const activeSourceRef = useRef(null)
 
   const getCtx = useCallback(() => {
     if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
@@ -24,10 +29,18 @@ export function useAudioPlayer() {
   const scheduleNext = useCallback(() => {
     if (playQueueRef.current.length === 0) {
       isPlayingRef.current = false
+      activeSourceRef.current = null
+      onPlaybackEnd?.()
       return
     }
 
+    const wasPlaying = isPlayingRef.current
     isPlayingRef.current = true
+
+    if (!wasPlaying) {
+      onPlaybackStart?.()
+    }
+
     const buffer = playQueueRef.current.shift()
     const ctx = getCtx()
 
@@ -35,6 +48,7 @@ export function useAudioPlayer() {
       const source = ctx.createBufferSource()
       source.buffer = decoded
       source.connect(ctx.destination)
+      activeSourceRef.current = source
 
       const now = ctx.currentTime
       const startAt = Math.max(now, nextStartTimeRef.current)
@@ -46,7 +60,7 @@ export function useAudioPlayer() {
       console.error('[AudioPlayer] Decode error:', err)
       scheduleNext()
     })
-  }, [getCtx])
+  }, [getCtx, onPlaybackStart, onPlaybackEnd])
 
   /**
    * Enqueue an ArrayBuffer (MP3 bytes from server) for playback.
@@ -63,6 +77,7 @@ export function useAudioPlayer() {
     playQueueRef.current = []
     isPlayingRef.current = false
     nextStartTimeRef.current = 0
+    activeSourceRef.current = null
     audioCtxRef.current?.close()
     audioCtxRef.current = null
   }, [])

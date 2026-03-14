@@ -8,22 +8,24 @@ from config import settings
 
 DEEPGRAM_TTS_URL = "https://api.deepgram.com/v1/speak"
 
+# Reuse a single client for connection pooling
+_http_client = httpx.AsyncClient(timeout=15.0)
+
 
 async def synthesize_fallback(text: str) -> bytes:
     """
     Fallback TTS using DeepGram Aura.
     Called only if Cartesia raises an exception.
     """
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(
-            DEEPGRAM_TTS_URL,
-            params  = {"model": "aura-asteria-en"},
-            headers = {
-                "Authorization": f"Token {settings.DEEPGRAM_API_KEY}",
-                "Content-Type":  "application/json",
-            },
-            json={"text": text},
-        )
+    response = await _http_client.post(
+        DEEPGRAM_TTS_URL,
+        params  = {"model": "aura-asteria-en"},
+        headers = {
+            "Authorization": f"Token {settings.DEEPGRAM_API_KEY}",
+            "Content-Type":  "application/json",
+        },
+        json={"text": text},
+    )
 
     if response.status_code != 200:
         raise Exception(

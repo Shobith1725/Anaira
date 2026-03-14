@@ -71,8 +71,9 @@ export default function Dashboard() {
                 if (msg.session_id) {
                     setSession(prev => prev ? prev : {
                         sessionId: msg.session_id,
+                        driverName: msg.driver_name || 'Driver',
                         connectedAt: Date.now(),
-                        mode: 'logistics',
+                        mode: msg.mode || 'logistics',
                     })
                 }
                 break
@@ -90,8 +91,9 @@ export default function Dashboard() {
                 setSession({
                     sessionId: msg.session_id,
                     driverId: msg.driver_id,
+                    driverName: msg.driver_name || 'Driver',
                     connectedAt: Date.now(),
-                    mode: 'logistics',
+                    mode: msg.mode || 'logistics',
                 })
                 break
 

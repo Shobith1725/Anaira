@@ -76,6 +76,12 @@ async def process_audio_chunk(
         "session_id": session_id,
     })
 
+    await broadcast({
+        "type":       "thought",
+        "text":       f"Heard: \"{transcript}\" — processing...",
+        "session_id": session_id,
+    })
+
     # ── Step 2: Neutral tone (Hume removed for speed) ─────────
     emotion_directive, tts_params = get_neutral_directive()
 
@@ -90,6 +96,12 @@ async def process_audio_chunk(
             if active:
                 args["shipment_id"] = active[0]["id"]
 
+        await broadcast({
+            "type":       "thought",
+            "text":       f"Calling tool: {tool_name}",
+            "session_id": session_id,
+        })
+
         result = await execute_tool(tool_name, args)
 
         await broadcast({
@@ -103,6 +115,12 @@ async def process_audio_chunk(
 
     # ── Step 4: Groq LLM ──────────────────────────────────────
     session_fresh = get_session(session_id)
+
+    await broadcast({
+        "type":       "thought",
+        "text":       "Analyzing intent and generating response...",
+        "session_id": session_id,
+    })
 
     try:
         response_text, updated_history = await respond(
@@ -141,6 +159,11 @@ async def process_audio_chunk(
             pass
 
     # ── Step 5: TTS → stream audio back ───────────────────────
+    await broadcast({
+        "type":       "thought",
+        "text":       f"Responding: \"{response_text[:60]}{'...' if len(response_text) > 60 else ''}\" — generating voice...",
+        "session_id": session_id,
+    })
     try:
         audio_bytes = await synthesize(
             text      = response_text,
@@ -192,9 +215,9 @@ async def voice_stream(ws: WebSocket):
             from services.supabase_client import (
                 get_active_shipments_for_driver,
                 get_route_for_driver,
+                _db,
             )
-            from supabase import create_client
-            sb = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+            sb = _db()  # reuse singleton — no duplicate client
 
             result = (
                 sb.table("drivers")
@@ -243,6 +266,17 @@ async def voice_stream(ws: WebSocket):
             "session_id":  session_id,
             "driver_id":   driver_id,
             "driver_name": driver_name,
+            "mode":        mode,
+        })
+
+        # Send neutral emotion defaults so EmotionMeter renders on connect
+        await broadcast({
+            "type":        "emotion",
+            "frustration": 0.0,
+            "joy":         0.1,
+            "stress":      0.0,
+            "confusion":   0.0,
+            "session_id":  session_id,
         })
 
         # ── Injected transport functions for this WS connection ─

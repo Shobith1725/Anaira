@@ -3,8 +3,7 @@ import { Mic, Phone, PhoneOff, Wifi, WifiOff, AlertCircle } from 'lucide-react'
 import { useAudioRecorder } from '../hooks/useAudioRecorder'
 import { useAudioPlayer } from '../hooks/useAudioPlayer'
 
-// ✅ FIXED: was window.location.host → resolves to localhost:5173 (Vite) in dev
-// WebSocket must go directly to FastAPI on port 8000
+// WebSocket via Vite proxy → backend on port 8000
 const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/voice`
 
 const STATE = {
@@ -26,7 +25,21 @@ export default function Widget() {
   const startTimeRef = useRef(null)
   const [elapsed, setElapsed] = useState(0)
 
-  const { playChunk, stop: stopPlayer } = useAudioPlayer()
+  // Refs to recorder controls so audio player callbacks don't cause stale closures
+  const pauseRecordingRef = useRef(null)
+  const resumeRecordingRef = useRef(null)
+
+  // ── Audio player with playback callbacks to pause/resume recorder ──
+  const { playChunk, stop: stopPlayer } = useAudioPlayer({
+    onPlaybackStart: () => {
+      // Pause mic while ANAIRA is speaking (prevents feedback loop)
+      pauseRecordingRef.current?.()
+    },
+    onPlaybackEnd: () => {
+      // Resume mic after ANAIRA finishes speaking
+      resumeRecordingRef.current?.()
+    },
+  })
 
   useEffect(() => {
     if (callState !== STATE.LIVE) { setElapsed(0); return }
@@ -48,10 +61,14 @@ export default function Widget() {
   }, [])
 
   const {
-    isRecording, startRecording, stopRecording, error: micError,
+    isRecording, startRecording, stopRecording, pauseRecording, resumeRecording, error: micError,
   } = useAudioRecorder({ onChunk: handleChunk })
 
-  // ✅ FIXED: endCall via ref so handleMessage never gets stale closure
+  // Keep refs in sync so audio player callbacks always see latest
+  useEffect(() => { pauseRecordingRef.current = pauseRecording }, [pauseRecording])
+  useEffect(() => { resumeRecordingRef.current = resumeRecording }, [resumeRecording])
+
+  // endCall via ref so handleMessage never gets stale closure
   const endCallRef = useRef(null)
 
   const endCall = useCallback(() => {
@@ -89,7 +106,11 @@ export default function Widget() {
         startRecording()
         break
       case 'transcript':
-        setStatusMsg(`You: ${msg.text}`)
+        if (msg.speaker === 'driver') {
+          setStatusMsg(`You: ${msg.text}`)
+        } else {
+          setStatusMsg(`ANAIRA: ${msg.text}`)
+        }
         break
       case 'response':
         setStatusMsg(`ANAIRA: ${msg.text}`)

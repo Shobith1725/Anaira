@@ -3,6 +3,9 @@ from config import settings
 
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
+# Reuse a single client for connection pooling (saves ~100-200ms per call)
+_http_client = httpx.AsyncClient(timeout=10.0)
+
 
 async def transcribe(audio_buffer: bytes) -> dict:
     """
@@ -22,16 +25,15 @@ async def transcribe(audio_buffer: bytes) -> dict:
         # ✅ detect_language intentionally NOT set — it overrides language=en
     }
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.post(
-            DEEPGRAM_URL,
-            params  = params,
-            headers = {
-                "Authorization": f"Token {settings.DEEPGRAM_API_KEY}",
-                "Content-Type":  "audio/webm",
-            },
-            content = audio_buffer,
-        )
+    response = await _http_client.post(
+        DEEPGRAM_URL,
+        params  = params,
+        headers = {
+            "Authorization": f"Token {settings.DEEPGRAM_API_KEY}",
+            "Content-Type":  "audio/webm",
+        },
+        content = audio_buffer,
+    )
 
     if response.status_code != 200:
         print(f"[DEEPGRAM ERROR] {response.status_code}: {response.text}")
