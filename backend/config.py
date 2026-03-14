@@ -6,8 +6,6 @@ class Settings(BaseSettings):
     # DeepGram
     DEEPGRAM_API_KEY: str
 
-    # Hume AI
-    HUME_API_KEY: str
 
     # Groq LLM
     GROQ_API_KEY: str

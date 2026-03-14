@@ -196,3 +196,129 @@ async def close_interaction(interaction_id: str,
          .update({"outcome": outcome, "duration_ms": duration_ms})\
          .eq("id", interaction_id)\
          .execute()
+
+
+# ── WAREHOUSES (NEW) ──────────────────────────────────────────────────
+
+async def get_warehouse_by_code(warehouse_code: str) -> dict | None:
+    result = (
+        _db().table("warehouses")
+             .select("*")
+             .ilike("warehouse_code", warehouse_code)
+             .limit(1)
+             .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+async def get_warehouse_by_name(name: str) -> dict | None:
+    result = (
+        _db().table("warehouses")
+             .select("*")
+             .ilike("name", f"%{name}%")
+             .limit(1)
+             .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+# ── INVENTORY (NEW) ───────────────────────────────────────────────────
+
+async def get_inventory_by_product(product_name: str,
+                                    warehouse_code: str = None) -> list:
+    """
+    Returns all inventory rows matching the product name.
+    Joins with warehouses table to get warehouse_name.
+    Optionally filters by warehouse_code.
+    """
+    query = (
+        _db().table("inventory")
+             .select("quantity, unit, warehouse_code, warehouses(name), products(name)")
+             .ilike("products.name", f"%{product_name}%")
+    )
+    if warehouse_code:
+        query = query.ilike("warehouse_code", warehouse_code)
+
+    result = query.execute()
+
+    rows = []
+    for row in (result.data or []):
+        warehouse_info = row.get("warehouses") or {}
+        product_info   = row.get("products") or {}
+        rows.append({
+            "warehouse_code": row["warehouse_code"],
+            "warehouse_name": warehouse_info.get("name", row["warehouse_code"]),
+            "product_name":   product_info.get("name", product_name),
+            "quantity":       row["quantity"],
+            "unit":           row.get("unit", "units"),
+        })
+    return rows
+
+
+async def get_all_inventory_for_warehouse(warehouse_code: str) -> list:
+    """
+    Returns all products stocked at a specific warehouse.
+    """
+    result = (
+        _db().table("inventory")
+             .select("quantity, unit, products(name)")
+             .ilike("warehouse_code", warehouse_code)
+             .order("quantity", desc=True)
+             .execute()
+    )
+
+    rows = []
+    for row in (result.data or []):
+        product_info = row.get("products") or {}
+        rows.append({
+            "product_name": product_info.get("name", "Unknown"),
+            "quantity":     row["quantity"],
+            "unit":         row.get("unit", "units"),
+        })
+    return rows
+
+
+# ── DELIVERY ORDERS (NEW) ─────────────────────────────────────────────
+
+async def get_delivery_order_by_id(order_id: str) -> dict | None:
+    result = (
+        _db().table("delivery_orders")
+             .select("*, warehouses!from_warehouse_code(name)")
+             .ilike("order_id", order_id)
+             .limit(1)
+             .execute()
+    )
+    if not result.data:
+        return None
+    return _format_delivery_order(result.data[0])
+
+
+async def get_delivery_orders_by_driver(driver_id: str) -> list:
+    result = (
+        _db().table("delivery_orders")
+             .select("*, warehouses!from_warehouse_code(name)")
+             .eq("assigned_driver_id", driver_id)
+             .in_("status", ["pending", "in_progress"])
+             .order("priority", desc=True)
+             .execute()
+    )
+    return [_format_delivery_order(row) for row in (result.data or [])]
+
+
+def _format_delivery_order(row: dict) -> dict:
+    """Normalize a delivery_orders row into a clean dict for tools."""
+    warehouse_info = row.get("warehouses") or {}
+    return {
+        "order_id":            row["order_id"],
+        "product_name":        row["product_name"],
+        "quantity":            row["quantity"],
+        "unit":                row.get("unit", "units"),
+        "from_warehouse_code": row["from_warehouse_code"],
+        "from_warehouse_name": warehouse_info.get("name", row["from_warehouse_code"]),
+        "destination_address": row["destination_address"],
+        "destination_city":    row.get("destination_city", ""),
+        "priority":            row.get("priority", "normal"),
+        "special_notes":       row.get("special_notes", ""),
+        "status":              row.get("status", "pending"),
+        "assigned_driver_id":  row.get("assigned_driver_id"),
+    }

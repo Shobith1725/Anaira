@@ -137,6 +137,78 @@ LOGISTICS_TOOLS = [
             },
         },
     },
+    # ── WAREHOUSE TOOLS (NEW) ──────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "get_warehouse_info",
+            "description": "Get warehouse details like address, phone, and name. Call when driver asks for a warehouse address, location, or contact number.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "warehouse_code": {"type": "string", "description": "e.g. WH-01, WH-02, Central Depot"},
+                    "warehouse_name": {"type": "string", "description": "partial name like 'central' or 'north'"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_product_quantity",
+            "description": "Check how much stock of a product is available at a warehouse. Call when driver asks about quantity, stock, or inventory of a product.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "product_name":   {"type": "string", "description": "e.g. Paracetamol, Insulin, Bandages"},
+                    "warehouse_code": {"type": "string", "description": "e.g. WH-01. Optional — if not given, checks all warehouses"},
+                },
+                "required": ["product_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_delivery_order",
+            "description": "Get details of a delivery order including what to deliver, how much, and where. Call when driver asks about their delivery order or what they need to deliver.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_id":   {"type": "string", "description": "e.g. ORD-001"},
+                    "driver_id":  {"type": "string"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_all_delivery_orders",
+            "description": "Get all pending delivery orders for a driver. Call when driver asks what deliveries they have today or what they need to do.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "driver_id": {"type": "string"},
+                },
+                "required": ["driver_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_warehouse_products",
+            "description": "List all products available at a specific warehouse with their quantities. Call when driver asks what products are at a warehouse.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "warehouse_code": {"type": "string", "description": "e.g. WH-01"},
+                },
+                "required": ["warehouse_code"],
+            },
+        },
+    },
 ]
 
 RECEPTIONIST_TOOLS = [
@@ -179,11 +251,6 @@ def _build_system_prompt(driver_name:      str,
                           active_shipments:  list,
                           current_route:     dict,
                           mode:              str) -> str:
-    # ✅ FIXED: detected_language removed entirely.
-    # Language is hardcoded to English in both the prompt and DeepGram params.
-    # Previously, DeepGram's detected_language field returned 'es' even when
-    # language='en' was set, causing Groq to respond in Spanish.
-
     if mode == "logistics":
         shipment_summary = ""
         if active_shipments:
@@ -214,14 +281,24 @@ TONE DIRECTIVE: {emotion_directive}
 
 YOUR ROLE:
 - Help drivers confirm deliveries, report delays, get next stop directions
+- Answer questions about warehouse addresses, product stock levels, and delivery orders
 - Identify shipments from context — driver may say "the package" or just a number
 - Always confirm the action you took out loud so driver knows it worked
 - Keep every response UNDER 30 WORDS — drivers are on the road
 - For route guidance speak the address simply and clearly
 - If driver has an emergency, escalate immediately
 
+WAREHOUSE QUERIES:
+- When driver asks for a warehouse address or location → call get_warehouse_info
+- When driver asks how much of a product is available → call get_product_quantity
+- When driver asks about their delivery order → call get_delivery_order
+- When driver asks what deliveries they have today → call get_all_delivery_orders
+- When driver asks what products are at a warehouse → call list_warehouse_products
+- Always speak quantities clearly: "You have 200 units of Paracetamol to deliver"
+- For low stock (under 50 units) always mention: "Stock is running low"
+
 RULES:
-- Never invent shipment details — always use tools to look them up
+- Never invent shipment or warehouse details — always use tools to look them up
 - Never reveal you are an AI unless directly asked
 - Always confirm every database action out loud
 - ENGLISH ONLY — regardless of what language the driver speaks in"""
@@ -263,7 +340,6 @@ async def respond(transcript:        str,
     system_prompt = _build_system_prompt(
         driver_name       = driver_name,
         emotion_directive = emotion_directive,
-        # ✅ detected_language NOT passed — removed from _build_system_prompt
         active_shipments  = active_shipments,
         current_route     = current_route,
         mode              = mode,

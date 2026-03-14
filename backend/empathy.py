@@ -55,6 +55,14 @@ NEUTRAL_PROFILE = {
 }
 
 
+def get_neutral_directive() -> tuple[str, dict]:
+    """Returns neutral directive and TTS params (no Hume analysis)."""
+    return (
+        NEUTRAL_PROFILE["directive"],
+        {"stability": NEUTRAL_PROFILE["stability"], "speed": NEUTRAL_PROFILE["speed"]}
+    )
+
+
 def get_emotion_directive(scores: dict) -> tuple[str, dict]:
     """
     Takes Hume emotion scores dict.

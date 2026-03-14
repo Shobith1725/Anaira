@@ -20,6 +20,7 @@ async def execute_tool(tool_name: str, args: dict) -> str:
     Never raises — always returns JSON so the Groq tool loop never hangs.
     """
     handlers = {
+        # Original logistics tools
         "identify_shipment":      _identify_shipment,
         "update_shipment_status": _update_shipment_status,
         "confirm_delivery":       _confirm_delivery,
@@ -28,14 +29,19 @@ async def execute_tool(tool_name: str, args: dict) -> str:
         "report_damage":          _report_damage,
         "request_reroute":        _request_reroute,
         "escalate_to_human":      _escalate_to_human,
+        # Original receptionist tools
         "check_slots":            _check_slots,
         "book_appointment":       _book_appointment,
+        # Warehouse tools (NEW)
+        "get_warehouse_info":     _get_warehouse_info,
+        "get_product_quantity":   _get_product_quantity,
+        "get_delivery_order":     _get_delivery_order,
+        "get_all_delivery_orders": _get_all_delivery_orders,
+        "list_warehouse_products": _list_warehouse_products,
     }
 
     handler = handlers.get(tool_name)
     if not handler:
-        # Return JSON — never raise. If this raised, Groq would get no tool result
-        # and keep retrying the same tool call in an infinite loop.
         return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
     try:
@@ -262,3 +268,158 @@ async def _book_appointment(business_id: str,
             "message":        f"Appointment booked for {slot_time}",
         })
     return json.dumps({"success": False, "message": "Could not book that slot"})
+
+
+# ── WAREHOUSE TOOLS (NEW) ──────────────────────────────────────────────
+
+async def _get_warehouse_info(warehouse_code: str = None,
+                               warehouse_name: str = None) -> str:
+    from services.supabase_client import get_warehouse_by_code, get_warehouse_by_name
+
+    warehouse = None
+    if warehouse_code:
+        warehouse = await get_warehouse_by_code(warehouse_code)
+    elif warehouse_name:
+        warehouse = await get_warehouse_by_name(warehouse_name)
+
+    if not warehouse:
+        return json.dumps({
+            "found":   False,
+            "message": "Warehouse not found. Please check the warehouse code or name.",
+        })
+
+    return json.dumps({
+        "found":          True,
+        "warehouse_code": warehouse["warehouse_code"],
+        "name":           warehouse["name"],
+        "address":        warehouse["address"],
+        "city":           warehouse["city"],
+        "phone":          warehouse.get("phone", "Not available"),
+        "manager":        warehouse.get("manager_name", "Not available"),
+        "capacity":       warehouse.get("capacity_units"),
+    })
+
+
+async def _get_product_quantity(product_name: str,
+                                 warehouse_code: str = None) -> str:
+    from services.supabase_client import get_inventory_by_product
+
+    results = await get_inventory_by_product(product_name, warehouse_code)
+
+    if not results:
+        return json.dumps({
+            "found":   False,
+            "message": f"No stock found for {product_name}." + (
+                f" at {warehouse_code}" if warehouse_code else ""
+            ),
+        })
+
+    # Build response for each warehouse that has this product
+    stock_info = []
+    for row in results:
+        stock_info.append({
+            "warehouse_code": row["warehouse_code"],
+            "warehouse_name": row["warehouse_name"],
+            "quantity":       row["quantity"],
+            "unit":           row.get("unit", "units"),
+            "low_stock":      row["quantity"] < 50,
+        })
+
+    total_qty = sum(r["quantity"] for r in results)
+    return json.dumps({
+        "found":        True,
+        "product_name": product_name,
+        "total_stock":  total_qty,
+        "by_warehouse": stock_info,
+    })
+
+
+async def _get_delivery_order(order_id: str = None,
+                               driver_id: str = None) -> str:
+    from services.supabase_client import get_delivery_order_by_id, get_delivery_orders_by_driver
+
+    order = None
+    if order_id:
+        order = await get_delivery_order_by_id(order_id)
+    elif driver_id:
+        orders = await get_delivery_orders_by_driver(driver_id)
+        order = orders[0] if orders else None
+
+    if not order:
+        return json.dumps({
+            "found":   False,
+            "message": "Delivery order not found.",
+        })
+
+    return json.dumps({
+        "found":            True,
+        "order_id":         order["order_id"],
+        "product_name":     order["product_name"],
+        "quantity":         order["quantity"],
+        "unit":             order.get("unit", "units"),
+        "from_warehouse":   order["from_warehouse_code"],
+        "destination":      order["destination_address"],
+        "destination_city": order.get("destination_city", ""),
+        "priority":         order.get("priority", "normal"),
+        "special_notes":    order.get("special_notes", ""),
+        "status":           order.get("status", "pending"),
+    })
+
+
+async def _get_all_delivery_orders(driver_id: str) -> str:
+    from services.supabase_client import get_delivery_orders_by_driver
+
+    orders = await get_delivery_orders_by_driver(driver_id)
+
+    if not orders:
+        return json.dumps({
+            "found":   False,
+            "message": "No pending delivery orders found for this driver.",
+        })
+
+    summary = []
+    for o in orders:
+        summary.append({
+            "order_id":       o["order_id"],
+            "product_name":   o["product_name"],
+            "quantity":       o["quantity"],
+            "unit":           o.get("unit", "units"),
+            "destination":    o["destination_address"],
+            "priority":       o.get("priority", "normal"),
+            "special_notes":  o.get("special_notes", ""),
+        })
+
+    return json.dumps({
+        "found":        True,
+        "total_orders": len(summary),
+        "orders":       summary,
+    })
+
+
+async def _list_warehouse_products(warehouse_code: str) -> str:
+    from services.supabase_client import get_all_inventory_for_warehouse
+
+    items = await get_all_inventory_for_warehouse(warehouse_code)
+
+    if not items:
+        return json.dumps({
+            "found":          False,
+            "warehouse_code": warehouse_code,
+            "message":        f"No products found at {warehouse_code}.",
+        })
+
+    products = []
+    for item in items:
+        products.append({
+            "product_name": item["product_name"],
+            "quantity":     item["quantity"],
+            "unit":         item.get("unit", "units"),
+            "low_stock":    item["quantity"] < 50,
+        })
+
+    return json.dumps({
+        "found":          True,
+        "warehouse_code": warehouse_code,
+        "product_count":  len(products),
+        "products":       products,
+    })

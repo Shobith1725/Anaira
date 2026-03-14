@@ -22,10 +22,9 @@ import uuid
 from datetime import datetime
 
 from services.deepgram_stt import transcribe
-from services.hume         import analyze_emotion
 from services.groq         import respond
 from services.cartesia_tts import synthesize
-from empathy               import get_emotion_directive
+from empathy               import get_neutral_directive
 from dashboard_ws          import broadcast
 from tools                 import execute_tool
 from memory                import store_session, get_session, update_session
@@ -53,21 +52,13 @@ async def process_audio_chunk(
     driver_id   = session.get("driver_id")
     mode        = session.get("mode", "logistics")
 
-    # ── Step 1: Parallel STT + Emotion ────────────────────────
-    stt_result     = {}
-    emotion_scores = {}
+    # ── Step 1: STT ────────────────────────────────────────────
+    stt_result = {}
     try:
-        async with asyncio.TaskGroup() as tg:
-            t_stt = tg.create_task(transcribe(audio_buffer))
-            t_emo = tg.create_task(analyze_emotion(audio_buffer))
-
-        stt_result     = t_stt.result()
-        emotion_scores = t_emo.result()
-
-    except* Exception as eg:
-        print(f"[STT/EMOTION ERROR] {eg.exceptions}")
-        stt_result     = {}
-        emotion_scores = {}
+        stt_result = await transcribe(audio_buffer)
+    except Exception as e:
+        print(f"[STT ERROR] {e}")
+        return
 
     transcript = stt_result.get("transcript", "").strip()
 
@@ -76,7 +67,6 @@ async def process_audio_chunk(
         return
 
     print(f"[STT]     {driver_name}: {transcript}")
-    print(f"[EMOTION] {emotion_scores}")
 
     await broadcast({
         "type":       "transcript",
@@ -86,25 +76,8 @@ async def process_audio_chunk(
         "session_id": session_id,
     })
 
-    await broadcast({
-        "type":        "emotion",
-        "frustration": emotion_scores.get("frustration", 0),
-        "joy":         emotion_scores.get("joy", 0),
-        "stress":      emotion_scores.get("stress", 0),
-        "confusion":   emotion_scores.get("confusion", 0),
-        "session_id":  session_id,
-    })
-
-    # ── Step 2: EmpathyOS ─────────────────────────────────────
-    emotion_directive, tts_params = get_emotion_directive(emotion_scores)
-
-    if emotion_scores:
-        dominant_emotion = max(emotion_scores, key=emotion_scores.get)
-        await broadcast({
-            "type":       "thought",
-            "text":       f"Detected: {dominant_emotion} → adjusting tone and voice params",
-            "session_id": session_id,
-        })
+    # ── Step 2: Neutral tone (Hume removed for speed) ─────────
+    emotion_directive, tts_params = get_neutral_directive()
 
     # ── Step 3: Session-aware tool executor ───────────────────
     async def _tool_executor_with_session(tool_name: str, args: dict) -> str:
