@@ -358,7 +358,7 @@ async def respond(transcript:        str,
         tools       = tools,
         tool_choice = "auto",
         temperature = 0.3,
-        max_tokens  = 200,
+        max_tokens  = 100,
     )
 
     msg = response.choices[0].message

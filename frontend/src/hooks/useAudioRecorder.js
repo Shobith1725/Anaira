@@ -12,7 +12,7 @@ import { useRef, useState, useCallback } from 'react'
  * complete, self-contained webm file with its own header.
  */
 
-const CYCLE_MS = 1500   // 1.5s capture window — faster response loop
+const CYCLE_MS = 1200   // 1.2s capture window — reduced for lower latency
 
 export function useAudioRecorder({ onChunk }) {
   const [isRecording, setIsRecording] = useState(false)

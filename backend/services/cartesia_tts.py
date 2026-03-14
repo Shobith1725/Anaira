@@ -33,7 +33,7 @@ async def synthesize(text:      str,
             "output_format": {
                 "container":   "mp3",
                 "encoding":    "mp3",
-                "sample_rate": 44100,
+                "sample_rate": 24000,
             },
             "speed":     speed,
             "stability": stability,

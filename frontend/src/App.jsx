@@ -64,10 +64,16 @@ const styles = {
     display: 'flex',
     gap: 8,
     padding: '6px',
-    borderRadius: 14,
-    background: 'rgba(10,10,18,0.9)',
-    border: '1px solid var(--border)',
-    backdropFilter: 'blur(20px)',
+    borderRadius: 16,
+    background: 'rgba(8,8,26,0.85)',
+    border: '1px solid rgba(79,143,255,0.12)',
+    backdropFilter: 'blur(24px) saturate(1.5)',
+    boxShadow: `
+      0 4px 20px rgba(0,0,0,0.5),
+      0 8px 40px rgba(0,0,0,0.3),
+      0 0 1px rgba(79,143,255,0.2),
+      inset 0 1px 0 rgba(255,255,255,0.04)
+    `,
   },
   content: {
     flex: 1,
